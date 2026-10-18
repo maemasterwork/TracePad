@@ -83,10 +83,24 @@
   <div class="score-card" data-assessment-score></div>
   <div data-student-progress></div>
   <section class="sec">
+    <h3 data-review-title></h3>
+    <ul class="alist" data-lesson-reviews></ul>
+  </section>
+  <section class="sec">
     <h3 data-weak-title></h3>
     <div data-weak-content></div>
   </section>
   <div data-chapter-detail></div>
+</template>
+
+<template id="class-lesson-review-item">
+  <li class="card lesson-review-row">
+    <div class="lesson-review-title">
+      <strong data-title></strong>
+      <span class="tag" data-status></span>
+    </div>
+    <button type="button" class="mini" data-accept hidden></button>
+  </li>
 </template>
 
 <template id="class-assignment-item">

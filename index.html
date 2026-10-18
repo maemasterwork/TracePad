@@ -969,7 +969,7 @@ function viewNavItems() {
   if (!me) return [];
   return me.role === 'teacher' ? [{ id: 'classes', title: t('myClasses'), icon: '▦' }] : [{ id: 'home', title: t('myProgress'), icon: '★' }];
 }
-function isViewId(id) { return id === 'home' || id === 'classes' || /^class\//.test(id) || /^student\//.test(id); }
+function isViewId(id) { return id === 'home' || id === 'classes' || /^class\//.test(id) || /^student\//.test(id) || /^lesson\//.test(id); }
 function renderNav() {
   var nav = $('#nav'); nav.innerHTML = '';
   viewNavItems().forEach(function (v) {
@@ -980,9 +980,11 @@ function renderNav() {
     b.addEventListener('click', function () { go(v.id); });
     nav.appendChild(b);
   });
-  PAGES.forEach(function (p) {
+  var navPages = PAGES, lessonRoute = /^lesson\/[^/]+\/(\d+)$/.exec(store.cur);
+  if (me && me.role === 'student') navPages = lessonRoute && PAGES[+lessonRoute[1]] ? [PAGES[+lessonRoute[1]]] : [];
+  navPages.forEach(function (p) {
     var lt = labTotals(p), b = document.createElement('button'); b.type = 'button'; b.className = 'nav-item';
-    if (p.id === store.cur && !isViewId(store.cur)) b.setAttribute('aria-current', 'page');
+    if (p.id === store.cur || (lessonRoute && +lessonRoute[1] === p.num)) b.setAttribute('aria-current', 'page');
     var num = p.kind === 'overview' ? '·' : p.num;
     var right = store.read[p.id] ? '<span class="nav-read" aria-label="' + esc(t('readDone')) + '">✓</span>' : (lt.total ? '<span class="nav-count">' + lt.done + '/' + lt.total + '</span>' : '');
     b.innerHTML = '<span class="nav-top"><span class="nav-num">' + num + '</span><span class="nav-title">' + esc(pageTitle(p)) + '</span>' + right + '</span>' +
@@ -1002,10 +1004,11 @@ function renderWatch() {
     host.appendChild(b);
   });
 }
-function refreshProgress() { renderNav(); renderWatch(); paintScore(); paintHeadMeta(); }
+function refreshProgress() { renderNav(); renderWatch(); paintScore(); paintHeadMeta(); if (curPage && curPage.kind !== 'view') paintLessonReview(curPage); }
 
 /* ---------- pages ---------- */
 var curPage = null;
+var studentLessonContext = null;
 function paintHeadMeta() {
   var box = $('#head-meta'); if (!box || !curPage) return;
   var lt = labTotals(curPage), ct = checklistTotals(curPage), h = '';
@@ -1037,12 +1040,17 @@ function renderPage(p) {
     if (p.num === 9 || p.num === 11) h += '<div id="disk-slot"></div>';
     h += labHtml(p);
   }
+  if (me && me.role === 'student' && studentLessonContext && studentLessonContext.lessonNum === p.num) {
+    h += '<section class="lesson-review-actions" id="lesson-review-actions"><div><p class="eyebrow">' + esc(t('classPath')) + '</p><h3>' + esc(t('lessonNumber', { n: p.num })) + '</h3><p class="help" data-submit-help></p></div><button type="button" class="btn" id="submitLesson"></button><div class="lesson-submit-message" role="status" aria-live="polite"></div></section>';
+  }
   if (p.kind !== 'overview') {
     h += '<div class="readbar"><button type="button" class="btn" id="readBtn"></button></div>';
   }
   var i = PAGES.indexOf(p), pv = PAGES[i - 1], nx = PAGES[i + 1];
-  h += '<div class="pager">' + (pv ? '<button type="button" class="pv" data-go="' + pv.id + '"><small>← ' + esc(t('prevCh')) + '</small><span>' + esc(pageTitle(pv)) + '</span></button>' : '') +
-    (nx ? '<button type="button" class="nx" data-go="' + nx.id + '"><small>' + esc(t('nextCh')) + ' →</small><span>' + esc(pageTitle(nx)) + '</span></button>' : '') + '</div>';
+  if (!(me && me.role === 'student' && studentLessonContext)) {
+    h += '<div class="pager">' + (pv ? '<button type="button" class="pv" data-go="' + pv.id + '"><small>← ' + esc(t('prevCh')) + '</small><span>' + esc(pageTitle(pv)) + '</span></button>' : '') +
+      (nx ? '<button type="button" class="nx" data-go="' + nx.id + '"><small>' + esc(t('nextCh')) + ' →</small><span>' + esc(pageTitle(nx)) + '</span></button>' : '') + '</div>';
+  }
   main.innerHTML = h;
 
   var ds = $('#disk-slot', main); if (ds) mountDisk(ds);
@@ -1060,10 +1068,55 @@ function renderPage(p) {
   if (rb) {
     var paintRead = function () { rb.textContent = store.read[p.id] ? t('isRead') : t('markRead'); rb.classList.toggle('done', !!store.read[p.id]); };
     paintRead();
-    rb.addEventListener('click', function () { if (store.read[p.id]) delete store.read[p.id]; else store.read[p.id] = 1; saveStore(); paintRead(); renderNav(); });
+    rb.addEventListener('click', function () { if (store.read[p.id]) delete store.read[p.id]; else store.read[p.id] = 1; saveStore(); paintRead(); renderNav(); paintLessonReview(p); });
   }
+  paintLessonReview(p);
   $$('[data-go]', main).forEach(function (b) { b.addEventListener('click', function () { go(b.getAttribute('data-go')); }); });
   paintScore(); paintHeadMeta();
+}
+
+function lessonIsComplete(num) {
+  if (num === 11) return !!store.read[PAGES[num].id];
+  var page = PAGES[num], totals = labTotals(page);
+  return totals.total > 0 && totals.done >= totals.total;
+}
+function paintLessonReview(page) {
+  var actions = $('#lesson-review-actions');
+  if (!actions || !studentLessonContext || studentLessonContext.lessonNum !== page.num) return;
+  var context = studentLessonContext, button = $('#submitLesson', actions), help = $('[data-submit-help]', actions), message = $('.lesson-submit-message', actions);
+  if (context.status === 'accepted') {
+    help.textContent = t('lessonSubmitAccepted'); button.hidden = true; return;
+  }
+  if (context.status === 'submitted') {
+    help.textContent = t('lessonSubmitWait'); button.hidden = true; return;
+  }
+  var complete = lessonIsComplete(page.num);
+  help.textContent = complete ? t('lessonSubmitReady') : t('lessonSubmitHelp');
+  button.hidden = false;
+  button.textContent = context.busy ? t('lessonSubmitting') : t('lessonSubmit');
+  button.disabled = !!context.busy || !complete;
+  if (!button.dataset.bound) {
+    button.dataset.bound = 'true';
+    button.addEventListener('click', async function () {
+      if (!lessonIsComplete(page.num) || context.busy) return;
+      context.busy = true; message.textContent = ''; paintLessonReview(page);
+      try {
+        while (syncBusy) await new Promise(function (resolve) { setTimeout(resolve, 30); });
+        clearTimeout(syncTimer); syncDirty = false;
+        await flush();
+        while (syncBusy) await new Promise(function (resolve) { setTimeout(resolve, 30); });
+        var result = await sb.rpc('submit_lesson', { p_class: context.classId, p_lesson: context.lessonNum });
+        if (result.error) throw result.error;
+        context.status = 'submitted';
+        message.textContent = t('lessonSubmitted');
+        paintLessonReview(page);
+      } catch (e) {
+        context.busy = false;
+        message.textContent = t('lessonSubmitError', { msg: String(e && e.message || e) });
+        paintLessonReview(page);
+      }
+    });
+  }
 }
 
 /* ---------- routing ---------- */
@@ -1075,6 +1128,10 @@ function scrollToId(id) {
 }
 function go(id, replace) {
   if (isViewId(id)) return goView(id);
+  if (me && me.role === 'student') {
+    var target = pageById(id) || pageById(SEC2PAGE[id]);
+    if (!studentLessonContext || !target || target.num !== studentLessonContext.lessonNum) return goView('home');
+  }
   var pid = id, sec = null;
   if (!pageById(id)) { if (SEC2PAGE[id]) { pid = SEC2PAGE[id]; sec = id; } else pid = 'overview'; }
   var changed = !curPage || curPage.id !== pid || curPage.kind === 'view';
@@ -1148,7 +1205,7 @@ Object.assign(UI.en, {
   myProgress: 'My progress', myClasses: 'My classes', loading: 'Loading…', loadFailed: 'Could not load this page. Check your connection and try again.', retry: 'Try again',
   joinH: 'Join a class', joinHelp: 'Type the code your teacher gave you.', joinCode: 'Class code', join: 'Join', joinNone: 'No class has that code.', joined: 'Joined {name}.',
   yourClasses: 'Your classes', noClasses: 'You have not joined a class yet.', leave: 'Leave', leaveSure: 'Click again to leave',
-  assignmentsH: 'Assignments', noAssignments: 'No assignments yet.', due: 'Due', noDue: 'No due date', overdue: 'Overdue', dueSoon: 'Due soon', done: 'Done', inProgress: 'In progress', notStarted: 'Not started',
+  assignmentsH: 'Assignments', noAssignments: 'No assignments yet.', due: 'Due', noDue: 'No due date', overdue: 'Overdue', dueSoon: 'Due soon', done: 'Done', inProgress: 'In progress', notStarted: 'Not started', submitted: 'Submitted',
   open: 'Open', scoreboardH: 'Your scores', chapterCol: 'Chapter', labCol: 'Lab', quizCol: 'Quiz right', predCol: 'Predictions right', exCol: 'Exercises passed', overallLab: 'Overall lab completion',
   assessScore: 'Assessment score', outOf: 'out of {n}',
   createClass: 'Create a class', className: 'Class name', create: 'Create', codeLabel: 'Join code', students: 'Students', studentsN: '{n} students', open2: 'Open', deleteClass: 'Delete class', deleteSure: 'Click again to delete for good',
@@ -1160,7 +1217,15 @@ Object.assign(UI.en, {
   detailH: 'Student detail', hintsUsed: 'Hints used', readCol: 'Read', exTried: 'Exercises tried', peeked: 'Solution opened', bestChecks: 'Best checks',
   guessVs: 'Guess → output', picked: 'Picked', correctIs: 'Correct', weakH: 'Concepts missed', noWeak: 'None yet.', attempts: 'Exercise attempts', unanswered: 'not answered', chapterPick: 'Chapter',
   copyHint: 'Select and copy the code', rolesNote: 'Teacher accounts need an invite code.', savedNote: 'Your progress is saved to your account.',
-  errGeneric: 'Something went wrong: {msg}', yes: 'yes', no: 'no'
+  errGeneric: 'Something went wrong: {msg}', yes: 'yes', no: 'no',
+  studentIntro: 'Choose a lesson, work through its practice, then send it to your teacher for review.',
+  lessonPath: 'Your learning path', lessons: 'Lessons', noClassTitle: 'Start with your class', noClassBody: 'Join your teacher’s class to unlock your first lesson.',
+  readyToStart: 'Ready to start', lessonInProgress: 'In progress', lessonSubmitted: 'Awaiting teacher', lessonAccepted: 'Accepted', lessonLocked: 'Locked',
+  startLesson: 'Start lesson', continueLesson: 'Continue lesson', openLesson: 'Review lesson', lessonCount: '{n} of {m} accepted',
+  joinAnother: 'Join another class', lessonAssignments: 'Assignments', yourScores: 'Your scores', lessonSubmit: 'Submit for teacher review', lessonSubmitHelp: 'Complete every practice item before submitting this lesson.',
+  lessonSubmitReady: 'Your work is complete. Submit it when you are ready.', lessonSubmitWait: 'Your lesson is with your teacher for review.', lessonSubmitAccepted: 'Your teacher accepted this lesson. The next lesson is now ready.',
+  lessonSubmitting: 'Submitting…', lessonSubmitError: 'Could not submit this lesson: {msg}', teacherReview: 'Lesson approvals', acceptLesson: 'Accept lesson', acceptingLesson: 'Accepting…',
+  lessonNumber: 'Lesson {n}', classPath: 'Class', classLesson: 'Lesson', noLessonReview: 'Not started yet', reviewUpdated: 'Lesson accepted. The next lesson is now available.'
 });
 Object.assign(UI.fa, {
   signIn: 'ورود', signUp: 'ساخت حساب', signOut: 'خروج', fullName: 'نام کامل', identifier: 'ایمیل یا نام کاربری', password: 'گذرواژه',
@@ -1174,7 +1239,7 @@ Object.assign(UI.fa, {
   myProgress: 'پیشرفت من', myClasses: 'کلاس‌های من', loading: 'در حال بارگذاری…', loadFailed: 'این صفحه بارگذاری نشد. اتصال اینترنت را بررسی کنید و دوباره تلاش کنید.', retry: 'تلاش دوباره',
   joinH: 'پیوستن به کلاس', joinHelp: 'کدی را که معلم به شما داده بنویسید.', joinCode: 'کد کلاس', join: 'پیوستن', joinNone: 'کلاسی با این کد پیدا نشد.', joined: 'به {name} پیوستید.',
   yourClasses: 'کلاس‌های شما', noClasses: 'هنوز به کلاسی نپیوسته‌اید.', leave: 'ترک کلاس', leaveSure: 'برای ترک دوباره بزنید',
-  assignmentsH: 'تکلیف‌ها', noAssignments: 'هنوز تکلیفی نیست.', due: 'مهلت', noDue: 'بدون مهلت', overdue: 'گذشته از مهلت', dueSoon: 'مهلت نزدیک است', done: 'انجام شد', inProgress: 'در حال انجام', notStarted: 'شروع نشده',
+  assignmentsH: 'تکلیف‌ها', noAssignments: 'هنوز تکلیفی نیست.', due: 'مهلت', noDue: 'بدون مهلت', overdue: 'گذشته از مهلت', dueSoon: 'مهلت نزدیک است', done: 'انجام شد', inProgress: 'در حال انجام', notStarted: 'شروع نشده', submitted: 'ارسال شد',
   open: 'باز کردن', scoreboardH: 'امتیازهای شما', chapterCol: 'فصل', labCol: 'آزمایشگاه', quizCol: 'پرسش‌های درست', predCol: 'حدس‌های درست', exCol: 'تمرین‌های قبول‌شده', overallLab: 'پیشرفت کل آزمایشگاه',
   assessScore: 'امتیاز آزمون', outOf: 'از {n}',
   createClass: 'ساخت کلاس', className: 'نام کلاس', create: 'ساخت', codeLabel: 'کد پیوستن', students: 'دانش‌آموزان', studentsN: '{n} دانش‌آموز', open2: 'باز کردن', deleteClass: 'حذف کلاس', deleteSure: 'برای حذف همیشگی دوباره بزنید',
@@ -1186,7 +1251,15 @@ Object.assign(UI.fa, {
   detailH: 'جزئیات دانش‌آموز', hintsUsed: 'راهنمایی‌های استفاده‌شده', readCol: 'خوانده', exTried: 'تمرین‌های امتحان‌شده', peeked: 'راه‌حل دیده شد', bestChecks: 'بهترین بررسی',
   guessVs: 'حدس ← خروجی', picked: 'انتخاب', correctIs: 'درست', weakH: 'مفهوم‌های اشتباه', noWeak: 'هنوز چیزی نیست.', attempts: 'تلاش‌های تمرین', unanswered: 'پاسخ داده نشده', chapterPick: 'فصل',
   copyHint: 'کد را انتخاب و کپی کنید', rolesNote: 'حساب معلم کد دعوت می‌خواهد.', savedNote: 'پیشرفت شما در حساب‌تان ذخیره می‌شود.',
-  errGeneric: 'مشکلی پیش آمد: {msg}', yes: 'بله', no: 'خیر'
+  errGeneric: 'مشکلی پیش آمد: {msg}', yes: 'بله', no: 'خیر',
+  studentIntro: 'یک درس را انتخاب کنید، تمرین‌هایش را انجام دهید و برای بررسی به معلم بفرستید.',
+  lessonPath: 'مسیر یادگیری شما', lessons: 'درس‌ها', noClassTitle: 'از کلاس خود شروع کنید', noClassBody: 'به کلاس معلم بپیوندید تا اولین درس برایتان باز شود.',
+  readyToStart: 'آمادهٔ شروع', lessonInProgress: 'در حال انجام', lessonSubmitted: 'در انتظار معلم', lessonAccepted: 'تأیید شد', lessonLocked: 'قفل است',
+  startLesson: 'شروع درس', continueLesson: 'ادامهٔ درس', openLesson: 'مرور درس', lessonCount: '{n} از {m} تأیید شده',
+  joinAnother: 'پیوستن به کلاس دیگر', lessonAssignments: 'تکلیف‌ها', yourScores: 'امتیازهای شما', lessonSubmit: 'ارسال برای بررسی معلم', lessonSubmitHelp: 'پیش از ارسال، همهٔ تمرین‌های این درس را کامل کنید.',
+  lessonSubmitReady: 'کار شما کامل است. هر وقت آماده بودید آن را بفرستید.', lessonSubmitWait: 'درس شما برای بررسی نزد معلم است.', lessonSubmitAccepted: 'معلم این درس را تأیید کرد. درس بعدی اکنون آماده است.',
+  lessonSubmitting: 'در حال ارسال…', lessonSubmitError: 'ارسال این درس انجام نشد: {msg}', teacherReview: 'تأیید درس‌ها', acceptLesson: 'تأیید درس', acceptingLesson: 'در حال تأیید…',
+  lessonNumber: 'درس {n}', classPath: 'کلاس', classLesson: 'درس', noLessonReview: 'هنوز شروع نشده', reviewUpdated: 'درس تأیید شد. درس بعدی اکنون در دسترس است.'
 });
 
 var CFG = window.TRACEPAD_CONFIG || {};
@@ -1468,6 +1541,7 @@ function initCloud() {
 var viewTok = 0;
 var viewTok = 0;
 var classViewsDoc = null, classViewsPromise = null;
+var studentViewsDoc = null, studentViewsPromise = null;
 function loadClassViews() {
   if (classViewsDoc) return Promise.resolve(classViewsDoc);
   if (!classViewsPromise) classViewsPromise = fetch('classes.html').then(function (response) {
@@ -1484,6 +1558,22 @@ function classTemplate(id) {
   if (!template) throw new Error('Missing class view template: ' + id);
   return template.content.cloneNode(true);
 }
+function loadStudentViews() {
+  if (studentViewsDoc) return Promise.resolve(studentViewsDoc);
+  if (!studentViewsPromise) studentViewsPromise = fetch('student-lessons.html').then(function (response) {
+    if (!response.ok) throw new Error('Could not load student-lessons.html');
+    return response.text();
+  }).then(function (markup) {
+    studentViewsDoc = new DOMParser().parseFromString(markup, 'text/html');
+    return studentViewsDoc;
+  });
+  return studentViewsPromise;
+}
+function studentTemplate(id) {
+  var template = studentViewsDoc && studentViewsDoc.getElementById(id);
+  if (!template) throw new Error('Missing student view template: ' + id);
+  return template.content.cloneNode(true);
+}
 function qerr(r) { if (r.error) throw r.error; return r.data; }
 function fmtDate(iso) { return new Date(iso).toLocaleDateString(store.lang === 'fa' ? 'fa-IR' : 'en-GB', { year: 'numeric', month: 'short', day: 'numeric' }); }
 function fmtWhen(iso) { return iso ? new Date(iso).toLocaleString(store.lang === 'fa' ? 'fa-IR' : 'en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : t('never'); }
@@ -1498,7 +1588,7 @@ function pctColor(p) { return 'background: color-mix(in srgb, var(--good) ' + Ma
 function goView(id) {
   var role = me && me.role;
   if (!me) return;
-  if (role === 'student' && id !== 'home') id = 'home';
+  if (role === 'student' && id !== 'home' && !/^lesson\//.test(id)) id = 'home';
   if (role === 'teacher' && id === 'home') id = 'classes';
   store.cur = id; saveStore();
   curPage = { id: id, kind: 'view', num: -1, doc: {} };
@@ -1513,6 +1603,28 @@ function renderView() {
   if (id === 'classes') return renderClasses(main, tok);
   if (parts[0] === 'class') return renderClass(main, parts[1], tok, parts[2] || 'students');
   if (parts[0] === 'student') return renderStudent(main, parts[1], parts[2], tok, parts[3]);
+  if (parts[0] === 'lesson') return renderStudentLesson(main, parts[1], +parts[2], tok);
+}
+
+async function renderStudentLesson(main, classId, lessonNum, tok) {
+  if (!me || me.role !== 'student' || lessonNum < 1 || lessonNum > 11 || !PAGES[lessonNum]) return goView('home');
+  var review;
+  try {
+    review = qerr(await sb.from('lesson_reviews').select('status').eq('class_id', classId).eq('student_id', me.id).eq('lesson_num', lessonNum).maybeSingle());
+  } catch (e) { if (tok === viewTok) failView(main, e, renderView); return; }
+  if (tok !== viewTok) return;
+  if (!review) {
+    main.innerHTML = '<div class="banner info" role="status">' + esc(t('lessonLocked')) + '</div><button type="button" class="btn alt" data-home>' + esc(t('myProgress')) + '</button>';
+    $('[data-home]', main).addEventListener('click', function () { go('home'); });
+    return;
+  }
+  if (review.status === 'submitted') {
+    main.innerHTML = '<section class="lesson-gate-screen"><p class="eyebrow">' + esc(t('lessonSubmitted')) + '</p><h2>' + esc(pageTitle(PAGES[lessonNum])) + '</h2><p class="help">' + esc(t('lessonSubmitWait')) + '</p><button type="button" class="btn alt" data-home>' + esc(t('myProgress')) + '</button></section>';
+    $('[data-home]', main).addEventListener('click', function () { go('home'); });
+    return;
+  }
+  studentLessonContext = { classId: classId, lessonNum: lessonNum, status: review.status, busy: false };
+  renderPage(PAGES[lessonNum]);
 }
 
 /* ---------- student: home ---------- */
@@ -1540,40 +1652,93 @@ function dueBadge(a, st) {
   return '<span>' + esc(t('due')) + ' ' + esc(fmtDate(a.due_at)) + '</span>' + (label ? ' <span class="tag ' + cls + '">' + esc(label) + '</span>' : '');
 }
 async function renderHome(main, tok) {
-  var enr, asg;
+  var enr, asg, reviews = [];
   try {
+    await loadStudentViews();
     enr = qerr(await sb.from('enrollments').select('class_id,classes(id,name)').eq('student_id', me.id));
     asg = qerr(await sb.from('assignments').select('id,class_id,page_id,title,due_at').order('due_at', { ascending: true, nullsFirst: false }));
+    if (enr.length) reviews = qerr(await sb.from('lesson_reviews').select('class_id,lesson_num,status').in('class_id', enr.map(function (x) { return x.class_id; })).eq('student_id', me.id));
   } catch (e) { if (tok === viewTok) failView(main, e, renderView); return; }
   if (tok !== viewTok) return;
-  var names = {}; enr.forEach(function (x) { if (x.classes) names[x.class_id] = x.classes.name; });
-  var h = '<header class="lh"><p class="eyebrow">' + esc(t('roleStudent')) + '</p><h2>' + esc(t('hi')) + ', ' + esc(me.full_name || me.username || '') + '</h2><p class="help">' + esc(t('savedNote')) + '</p></header>';
-  h += '<section class="sec"><h3>' + esc(t('assignmentsH')) + '</h3>';
-  if (!asg.length) h += '<p class="help">' + esc(t('noAssignments')) + '</p>';
-  else h += '<ul class="alist">' + asg.map(function (a) {
-    var st = assignStatus(a), p = pageById(a.page_id), lt = p ? labTotals(p) : { done: 0, total: 0 };
-    return '<li class="card arow"><div class="agrow"><strong>' + esc(a.title || (p ? pageTitle(p) : a.page_id)) + '</strong><span class="tag st-' + st + '">' + esc(t(st)) + '</span></div>' +
-      '<div class="note">' + esc(names[a.class_id] || '') + ' · ' + dueBadge(a, st) + '</div>' +
-      (lt.total ? '<div class="bar"><i style="width:' + Math.round(100 * lt.done / lt.total) + '%"></i></div><div class="note">' + lt.done + '/' + lt.total + '</div>' : '') +
-      '<div><button type="button" class="btn alt" data-open="' + esc(a.page_id) + '">' + esc(t('open')) + '</button></div></li>';
-  }).join('') + '</ul>';
-  h += '</section>';
+  studentLessonContext = null;
+  var view = studentTemplate('student-dashboard');
+  $('[data-role]', view).textContent = t('roleStudent');
+  $('[data-greeting]', view).textContent = t('hi') + ', ' + (me.full_name || me.username || '');
+  $('[data-intro]', view).textContent = t('studentIntro');
+  $('[data-empty-title]', view).textContent = t('noClassTitle');
+  $('[data-empty-copy]', view).textContent = t('noClassBody');
+  $('[data-empty]', view).hidden = !!enr.length;
+  $('[data-lesson-section]', view).hidden = !enr.length;
+  $('[data-path-label]', view).textContent = t('lessonPath');
+  $('[data-lessons-title]', view).textContent = t('lessons');
+  $('[data-join-title]', view).textContent = t(enr.length ? 'joinAnother' : 'joinH');
+  $('[data-join-help]', view).textContent = t('joinHelp');
+  $('[data-code-label]', view).textContent = t('joinCode');
+  $('[data-join-button]', view).textContent = t('join');
+  $('[data-scores-title]', view).textContent = t('yourScores');
+  $('[data-score-table]', view).innerHTML = scoreTable();
+  var assignmentSection = $('[data-assignment-section]', view), assignmentList = $('[data-assignments]', view);
+  $('[data-assignments-title]', view).textContent = t('lessonAssignments');
+  assignmentSection.hidden = !enr.length || !asg.length;
 
-  h += '<section class="sec"><h3>' + esc(t('scoreboardH')) + '</h3>' + scoreTable() + '</section>';
-
-  h += '<section class="sec"><h3>' + esc(t('yourClasses')) + '</h3>';
-  if (!enr.length) h += '<p class="help">' + esc(t('noClasses')) + '</p>';
-  else h += '<ul class="alist">' + enr.map(function (x) { return '<li class="card arow"><div class="agrow"><strong>' + esc(x.classes ? x.classes.name : '') + '</strong><button type="button" class="mini" data-leave="' + x.class_id + '">' + esc(t('leave')) + '</button></div></li>'; }).join('') + '</ul>';
-  h += '<form class="card joinform" id="joinForm"><h4>' + esc(t('joinH')) + '</h4><p class="help">' + esc(t('joinHelp')) + '</p><div class="guess-row"><div class="field"><label for="j-code">' + esc(t('joinCode')) + '</label><input id="j-code" autocomplete="off" autocapitalize="characters" spellcheck="false" dir="ltr" maxlength="12"></div><button type="submit" class="btn">' + esc(t('join')) + '</button></div><div id="joinMsg" aria-live="polite"></div></form></section>';
-  main.innerHTML = h;
-  $$('[data-open]', main).forEach(function (b) { b.addEventListener('click', function () { go(b.getAttribute('data-open')); }); });
-  $$('[data-leave]', main).forEach(function (b) {
-    var armed = false;
-    b.addEventListener('click', async function () {
-      if (!armed) { armed = true; b.textContent = t('leaveSure'); setTimeout(function () { armed = false; b.textContent = t('leave'); }, 4000); return; }
-      try { qerr(await sb.from('enrollments').delete().eq('class_id', b.getAttribute('data-leave')).eq('student_id', me.id)); renderView(); } catch (e) { failView(main, e, renderView); }
-    });
+  var classHost = $('[data-classes]', view), classNames = {};
+  enr.forEach(function (enrollment) {
+    var classId = enrollment.class_id, className = enrollment.classes ? enrollment.classes.name : '';
+    classNames[classId] = className;
+    var classRows = reviews.filter(function (r) { return r.class_id === classId; });
+    var accepted = classRows.filter(function (r) { return r.status === 'accepted'; }).length;
+    var track = studentTemplate('student-class-track');
+    $('[data-class-label]', track).textContent = t('classPath');
+    $('[data-class-name]', track).textContent = className;
+    $('[data-class-progress]', track).textContent = t('lessonCount', { n: accepted, m: 11 });
+    var lessonList = $('[data-lessons]', track);
+    for (let n = 1; n <= 11; n++) {
+      const page = PAGES[n], review = classRows.filter(function (r) { return r.lesson_num === n; })[0];
+      const state = review ? review.status : (n === 1 || classRows.some(function (r) { return r.lesson_num === n - 1 && r.status === 'accepted'; }) ? 'starting' : 'locked');
+      const card = studentTemplate('student-lesson-card'), button = $('[data-open]', card);
+      card.querySelector('[data-state]').setAttribute('data-state', state);
+      $('[data-number]', card).textContent = String(n).padStart(2, '0');
+      $('[data-status]', card).textContent = t(state === 'starting' ? 'readyToStart' : state === 'in_progress' ? 'lessonInProgress' : state === 'submitted' ? 'lessonSubmitted' : state === 'accepted' ? 'lessonAccepted' : 'lessonLocked');
+      $('[data-title]', card).textContent = pageTitle(page);
+      const lessonProgress = n === 11 ? checklistTotals(page) : labTotals(page);
+      $('[data-detail]', card).textContent = state === 'locked' ? t('lessonLocked') : state === 'submitted' ? t('lessonSubmitWait') : state === 'accepted' ? t('lessonSubmitAccepted') : (lessonProgress.done + '/' + lessonProgress.total);
+      button.textContent = state === 'starting' ? t('startLesson') : state === 'in_progress' ? t('continueLesson') : t('openLesson');
+      button.disabled = state === 'locked' || state === 'submitted';
+      button.addEventListener('click', async function () {
+        if (state === 'starting' || state === 'in_progress') {
+          button.disabled = true;
+          var started = await sb.rpc('start_lesson', { p_class: classId, p_lesson: n });
+          if (started.error) { button.disabled = false; alert_(t('errGeneric', { msg: started.error.message })); return; }
+        }
+        go('lesson/' + classId + '/' + n);
+      });
+      lessonList.appendChild(card);
+    }
+    classHost.appendChild(track);
   });
+
+  asg.forEach(function (a) {
+    var page = pageById(a.page_id), status = assignStatus(a), lessonNum = page ? page.num : 0;
+    var review = reviews.filter(function (r) { return r.class_id === a.class_id && r.lesson_num === lessonNum; })[0];
+    if (review && review.status === 'accepted') status = 'done';
+    else if (review && review.status === 'submitted') status = 'submitted';
+    var available = lessonNum > 0 && (review ? review.status === 'in_progress' || review.status === 'accepted' : lessonNum === 1 || reviews.some(function (r) { return r.class_id === a.class_id && r.lesson_num === lessonNum - 1 && r.status === 'accepted'; }));
+    var item = document.createElement('li'); item.className = 'card arow';
+    item.innerHTML = '<div class="agrow"><strong>' + esc(a.title || (page ? pageTitle(page) : a.page_id)) + '</strong><span class="tag st-' + status + '">' + esc(t(status)) + '</span></div>' +
+      '<div class="note">' + esc(classNames[a.class_id] || '') + ' · ' + dueBadge(a, status) + '</div>' +
+      '<div><button type="button" class="btn alt" data-assignment-open>' + esc(t('open')) + '</button></div>';
+    var open = $('[data-assignment-open]', item); open.disabled = !available;
+    open.addEventListener('click', async function () {
+      if (!review || review.status === 'starting') {
+        var started = await sb.rpc('start_lesson', { p_class: a.class_id, p_lesson: lessonNum });
+        if (started.error) { alert_(t('errGeneric', { msg: started.error.message })); return; }
+      }
+      go('lesson/' + a.class_id + '/' + lessonNum);
+    });
+    assignmentList.appendChild(item);
+  });
+
+  main.replaceChildren(view);
   $('#joinForm', main).addEventListener('submit', async function (e) {
     e.preventDefault();
     var code = $('#j-code', main).value.trim(), msg = $('#joinMsg', main);
@@ -1782,10 +1947,11 @@ function bindAssign(main, classId) {
 
 /* ---------- teacher: one student ---------- */
 async function renderStudent(main, classId, uid, tok, chSel) {
-  var prof, rows = [];
+  var prof, rows = [], lessonReviews = [];
   try {
     await loadClassViews();
     prof = qerr(await sb.from('profiles').select('id,full_name,username').eq('id', uid).single());
+    lessonReviews = qerr(await sb.from('lesson_reviews').select('lesson_num,status').eq('class_id', classId).eq('student_id', uid));
     for (var from = 0; ; from += 1000) {
       var part = qerr(await sb.from('progress').select('key,data,updated_at').eq('user_id', uid).order('key').range(from, from + 999));
       rows = rows.concat(part); if (part.length < 1000) break;
@@ -1817,6 +1983,29 @@ async function renderStudent(main, classId, uid, tok, chSel) {
   }
   $('[data-assessment-score]', view).innerHTML = '<span class="chip">' + esc(t('assessScore')) + '</span><strong>' + (pts.a + pts.b + pts.c) + ' / 90</strong><span class="note">A ' + pts.a + '/20 · B ' + pts.b + '/30 · C ' + pts.c + '/40</span>';
   $('[data-student-progress]', view).innerHTML = '<div class="tbl-wrap"><table class="dash clickable"><thead><tr><th>' + esc(t('chapterCol')) + '</th><th>' + esc(t('predCol')) + '</th><th>' + esc(t('quizCol')) + '</th><th>' + esc(t('exCol')) + '</th><th>' + esc(t('hintsUsed')) + '</th><th>' + esc(t('readCol')) + '</th></tr></thead><tbody>' + trs + '</tbody></table></div>';
+  $('[data-review-title]', view).textContent = t('teacherReview');
+  var reviewList = $('[data-lesson-reviews]', view);
+  for (let lessonNum = 1; lessonNum <= 11; lessonNum++) {
+    const review = lessonReviews.filter(function (r) { return r.lesson_num === lessonNum; })[0];
+    const previous = lessonReviews.filter(function (r) { return r.lesson_num === lessonNum - 1; })[0];
+    const state = review ? review.status : (lessonNum === 1 || (previous && previous.status === 'accepted') ? 'starting' : 'locked');
+    const item = classTemplate('class-lesson-review-item');
+    $('[data-title]', item).textContent = lessonNum + '. ' + pageTitle(PAGES[lessonNum]);
+    $('[data-status]', item).textContent = t(state === 'starting' ? 'readyToStart' : state === 'in_progress' ? 'lessonInProgress' : state === 'submitted' ? 'lessonSubmitted' : state === 'accepted' ? 'lessonAccepted' : 'lessonLocked');
+    $('[data-status]', item).classList.add('lesson-status-' + state);
+    const acceptButton = $('[data-accept]', item);
+    acceptButton.hidden = state !== 'submitted';
+    acceptButton.textContent = t('acceptLesson');
+    if (state === 'submitted') acceptButton.addEventListener('click', async function () {
+      acceptButton.disabled = true;
+      acceptButton.textContent = t('acceptingLesson');
+      var result = await sb.rpc('accept_lesson', { p_class: classId, p_student: uid, p_lesson: lessonNum });
+      if (result.error) { acceptButton.disabled = false; acceptButton.textContent = t('acceptLesson'); alert_(t('errGeneric', { msg: result.error.message })); return; }
+      alert_(t('reviewUpdated'));
+      renderView();
+    });
+    reviewList.appendChild(item);
+  }
   var weak = rows.filter(function (r) { return r.key.indexOf('miss:') === 0 && TAGS[r.key.slice(5)]; }).sort(function (a, b) { return b.data.n - a.data.n; });
   $('[data-weak-title]', view).textContent = t('weakH');
   $('[data-weak-content]', view).innerHTML = weak.length ? '<ul class="weak">' + weak.map(function (r) { return '<li><span>' + esc(L(TAGS[r.key.slice(5)])) + '</span><b>×' + r.data.n + '</b></li>'; }).join('') + '</ul>' : '<p class="help">' + esc(t('noWeak')) + '</p>';

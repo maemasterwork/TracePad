@@ -43,6 +43,7 @@ What is in this folder:
 - **Students** see *My progress*: assignments with due dates and status, scores per chapter, and the assessment score out of 90.
   Every prediction, quiz answer, exercise result, hint, checklist tick and "mark as read" is saved automatically.
   The chip at the top shows *Saved*, *Saving…* or *Offline, will retry*. Work done offline is kept on the device and sent later.
+- **Lesson path:** a student joins a class before lesson cards appear. Lessons unlock in order; completing a lesson sends it to the class teacher, and only teacher approval unlocks the next lesson. When updating an existing deployment, rerun `sql/schema.sql` to add the lesson review table and secure approval functions.
 - **Teachers** see *My classes*: create classes, share join codes, open a class to get a table of every student by chapter,
   the class average, the concepts the class misses most, and per-student detail (every guess, quiz pick, exercise attempt and hints used).
   The *Assignments* tab sets a chapter and a due date and shows how many students have finished.

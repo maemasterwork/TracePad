@@ -49,6 +49,21 @@ create table if not exists public.assignments (
 );
 create index if not exists assignments_class_idx on public.assignments (class_id);
 
+create table if not exists public.lesson_reviews (
+  class_id    uuid not null references public.classes (id) on delete cascade,
+  student_id  uuid not null references public.profiles (id) on delete cascade,
+  lesson_num  int not null check (lesson_num between 1 and 11),
+  status      text not null check (status in ('in_progress', 'submitted', 'accepted')),
+  started_at  timestamptz not null default now(),
+  submitted_at timestamptz,
+  accepted_at timestamptz,
+  accepted_by uuid references public.profiles (id) on delete set null,
+  primary key (class_id, student_id, lesson_num),
+  check ((accepted_at is null) = (accepted_by is null)),
+  check (status <> 'accepted' or (submitted_at is not null and accepted_at is not null))
+);
+create index if not exists lesson_reviews_class_status_idx on public.lesson_reviews (class_id, status);
+
 -- One row per thing a learner did. key examples:
 --   pred:3:p1   quiz:3:q1   ex:3:e1   read:3   cl:3-l1   miss:float-eq   meta:prefs   meta:vfs
 create table if not exists public.progress (
@@ -111,6 +126,7 @@ alter table public.app_settings enable row level security;
 alter table public.classes     enable row level security;
 alter table public.enrollments enable row level security;
 alter table public.assignments enable row level security;
+alter table public.lesson_reviews enable row level security;
 alter table public.progress    enable row level security;
 
 -- profiles: read yourself, and teachers read their own students. Only the name is editable.
@@ -153,6 +169,11 @@ create policy assignments_select on public.assignments for select to authenticat
 drop policy if exists assignments_write on public.assignments;
 create policy assignments_write on public.assignments for all to authenticated
   using (public.teaches_class(class_id)) with check (public.teaches_class(class_id));
+
+-- Lesson review records are visible to the student and the class's teacher; writes use RPCs.
+drop policy if exists lesson_reviews_select on public.lesson_reviews;
+create policy lesson_reviews_select on public.lesson_reviews for select to authenticated
+  using (student_id = auth.uid() or public.teaches_class(class_id));
 
 -- progress: you own your rows; teachers can read (never change) their students' rows.
 drop policy if exists progress_select on public.progress;
@@ -222,10 +243,91 @@ begin
   group by p.user_id, nullif(split_part(p.key, ':', 2), '')::int;
 end $$;
 
+-- Students can start only the first unaccepted lesson in a class.
+create or replace function public.start_lesson(p_class uuid, p_lesson int) returns text
+language plpgsql security definer set search_path = public as $$
+declare current_status text;
+begin
+  if auth.uid() is null or public.is_teacher() then raise exception 'student account required' using errcode = '42501'; end if;
+  if p_lesson < 1 or p_lesson > 11 or not public.in_class(p_class) then
+    raise exception 'lesson unavailable' using errcode = '42501';
+  end if;
+  if p_lesson > 1 and not exists (
+    select 1 from public.lesson_reviews
+    where class_id = p_class and student_id = auth.uid() and lesson_num = p_lesson - 1 and status = 'accepted'
+  ) then raise exception 'previous lesson is not accepted' using errcode = '42501'; end if;
+
+  insert into public.lesson_reviews (class_id, student_id, lesson_num, status)
+  values (p_class, auth.uid(), p_lesson, 'in_progress')
+  on conflict (class_id, student_id, lesson_num) do nothing;
+
+  select status into current_status from public.lesson_reviews
+  where class_id = p_class and student_id = auth.uid() and lesson_num = p_lesson;
+  return current_status;
+end $$;
+
+-- The learner can submit only after all chapter activities have been completed.
+create or replace function public.submit_lesson(p_class uuid, p_lesson int) returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  needed int;
+  completed int;
+  current_status text;
+begin
+  if auth.uid() is null or public.is_teacher() then raise exception 'student account required' using errcode = '42501'; end if;
+  if p_lesson < 1 or p_lesson > 11 or not public.in_class(p_class) then
+    raise exception 'lesson unavailable' using errcode = '42501';
+  end if;
+  if p_lesson > 1 and not exists (
+    select 1 from public.lesson_reviews
+    where class_id = p_class and student_id = auth.uid() and lesson_num = p_lesson - 1 and status = 'accepted'
+  ) then raise exception 'previous lesson is not accepted' using errcode = '42501'; end if;
+
+  select status into current_status from public.lesson_reviews
+  where class_id = p_class and student_id = auth.uid() and lesson_num = p_lesson;
+  if current_status is null then raise exception 'start the lesson first'; end if;
+  if current_status = 'accepted' or current_status = 'submitted' then return current_status; end if;
+
+  if p_lesson = 11 then
+    if not exists (select 1 from public.progress where user_id = auth.uid() and key = 'read:11') then
+      raise exception 'lesson is incomplete';
+    end if;
+  else
+    needed := case p_lesson
+      when 1 then 8 when 2 then 10 when 3 then 9 when 4 then 7 when 5 then 9
+      when 6 then 10 when 7 then 8 when 8 then 10 when 9 then 5 when 10 then 24
+    end;
+    select count(*) into completed from public.progress
+    where user_id = auth.uid() and (
+      (key like 'pred:' || p_lesson || ':%') or
+      (key like 'quiz:' || p_lesson || ':%') or
+      (key like 'ex:' || p_lesson || ':%' and data ->> 'pass' = 'true')
+    );
+    if completed < needed then raise exception 'lesson is incomplete'; end if;
+  end if;
+
+  update public.lesson_reviews set status = 'submitted', submitted_at = now()
+  where class_id = p_class and student_id = auth.uid() and lesson_num = p_lesson;
+  return 'submitted';
+end $$;
+
+-- Only the teacher who owns the class can approve a submitted lesson.
+create or replace function public.accept_lesson(p_class uuid, p_student uuid, p_lesson int) returns boolean
+language plpgsql security definer set search_path = public as $$
+begin
+  if not public.teaches_class(p_class) then raise exception 'not your class' using errcode = '42501'; end if;
+  update public.lesson_reviews set status = 'accepted', accepted_at = now(), accepted_by = auth.uid()
+  where class_id = p_class and student_id = p_student and lesson_num = p_lesson and status = 'submitted';
+  if not found then raise exception 'lesson is not awaiting approval'; end if;
+  return true;
+end $$;
+
 grant execute on function public.claim_teacher(text), public.join_class(text),
-  public.class_progress(uuid) to authenticated;
+  public.class_progress(uuid), public.start_lesson(uuid, int),
+  public.submit_lesson(uuid, int), public.accept_lesson(uuid, uuid, int) to authenticated;
 revoke execute on function public.claim_teacher(text), public.join_class(text),
-  public.class_progress(uuid) from anon, public;
+  public.class_progress(uuid), public.start_lesson(uuid, int),
+  public.submit_lesson(uuid, int), public.accept_lesson(uuid, uuid, int) from anon, public;
 -- Helper functions are used inside policies; keep them callable by signed-in users only.
 revoke execute on function public.is_teacher(), public.teaches_class(uuid), public.in_class(uuid),
   public.teaches_student(uuid) from anon, public;
@@ -234,5 +336,6 @@ grant execute on function public.is_teacher(), public.teaches_class(uuid), publi
 
 grant select, insert, update, delete on public.progress to authenticated;
 grant select, insert, update, delete on public.classes, public.assignments to authenticated;
+grant select on public.lesson_reviews to authenticated;
 grant select, delete on public.enrollments to authenticated;
 grant select on public.profiles to authenticated;
