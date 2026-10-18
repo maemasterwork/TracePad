@@ -1,0 +1,101 @@
+<template id="class-directory">
+  <header class="lh">
+    <p class="eyebrow" data-role></p>
+    <h2 data-title></h2>
+  </header>
+  <ul class="alist" data-classes></ul>
+  <form class="card joinform" id="newClass">
+    <h4 data-create-title></h4>
+    <div class="guess-row">
+      <div class="field">
+        <label for="c-name" data-name-label></label>
+        <input id="c-name" maxlength="80" autocomplete="off">
+      </div>
+      <button type="submit" class="btn" data-create></button>
+    </div>
+    <div id="cMsg" aria-live="polite"></div>
+  </form>
+</template>
+
+<template id="class-directory-item">
+  <li class="card arow">
+    <div class="agrow">
+      <strong data-name></strong>
+      <span class="note" data-student-count></span>
+    </div>
+    <div class="note"><span data-code-label></span>: <code class="joincode" data-code></code></div>
+    <div class="actions">
+      <button type="button" class="btn" data-class></button>
+      <span class="grow"></span>
+      <button type="button" class="mini" data-del></button>
+    </div>
+  </li>
+</template>
+
+<template id="class-detail">
+  <header class="lh">
+    <p class="eyebrow"><button type="button" class="pill-link" data-go="classes" data-back></button></p>
+    <h2 data-name></h2>
+    <p class="help"><span data-code-label></span>: <code class="joincode" data-code></code> · <span data-student-count></span></p>
+    <div class="seg tabseg" role="group">
+      <button type="button" data-tab="students"></button>
+      <button type="button" data-tab="assign"></button>
+    </div>
+  </header>
+  <div data-class-panel></div>
+</template>
+
+<template id="class-assignment-panel">
+  <div data-assignment-list></div>
+  <form class="card joinform" id="newAssign">
+    <h4 data-new-title></h4>
+    <div class="field">
+      <label for="as-page" data-page-label></label>
+      <select id="as-page"></select>
+    </div>
+    <div class="field">
+      <label for="as-title" data-title-label></label>
+      <input id="as-title" maxlength="100" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="as-due" data-due-label></label>
+      <input id="as-due" type="date" dir="ltr">
+    </div>
+    <div><button type="submit" class="btn" data-add></button></div>
+    <div id="aMsg" aria-live="polite"></div>
+  </form>
+</template>
+
+<template id="class-students-panel">
+  <div data-student-table></div>
+  <section class="sec">
+    <h3 data-struggle-title></h3>
+    <div data-struggle-content></div>
+  </section>
+</template>
+
+<template id="class-student-detail">
+  <header class="lh">
+    <p class="eyebrow"><button type="button" class="pill-link" data-go-back></button></p>
+    <h2 data-student-name></h2>
+    <p class="help"><span data-last-label></span>: <span data-last></span><span data-username></span></p>
+  </header>
+  <div class="score-card" data-assessment-score></div>
+  <div data-student-progress></div>
+  <section class="sec">
+    <h3 data-weak-title></h3>
+    <div data-weak-content></div>
+  </section>
+  <div data-chapter-detail></div>
+</template>
+
+<template id="class-assignment-item">
+  <li class="card arow">
+    <div class="agrow">
+      <strong data-name></strong>
+      <button type="button" class="mini" data-rm></button>
+    </div>
+    <div class="note" data-summary></div>
+    <div class="bar"><i data-progress></i></div>
+  </li>
+</template>
