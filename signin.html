@@ -1,0 +1,38 @@
+<div class="auth-card">
+  <h2 id="authTitle">Tracepad</h2>
+  <p class="help" id="authWelcome"></p>
+  <div class="banner info" id="authSetup" hidden>
+    <strong id="authSetupTitle"></strong>
+    <p id="authSetupBody"></p>
+  </div>
+  <div class="seg authseg" role="group" id="authModes">
+    <button type="button" data-mode="in" id="authSignIn"></button>
+    <button type="button" data-mode="up" id="authSignUp"></button>
+  </div>
+  <div class="banner info" id="authMessage" role="alert" hidden></div>
+  <form id="authForm" class="auth-form" novalidate>
+    <div class="field" id="authNameField">
+      <label for="a-name" id="authNameLabel"></label>
+      <input id="a-name" autocomplete="name">
+    </div>
+    <div class="field">
+      <label for="a-id" id="authIdLabel"></label>
+      <input id="a-id" autocomplete="username" autocapitalize="off" spellcheck="false" dir="ltr">
+    </div>
+    <div class="field">
+      <label for="a-pw" id="authPasswordLabel"></label>
+      <input id="a-pw" type="password" dir="ltr">
+      <small class="note" id="authPasswordHint"></small>
+    </div>
+    <fieldset class="roles" id="authRoles">
+      <label><input type="radio" name="role" value="student" checked> <span id="authStudentLabel"></span></label>
+      <label><input type="radio" name="role" value="teacher"> <span id="authTeacherLabel"></span></label>
+    </fieldset>
+    <div class="field" id="tc-wrap" hidden>
+      <label for="a-tc" id="authTeacherCodeLabel"></label>
+      <input id="a-tc" autocomplete="off" autocapitalize="off" spellcheck="false" dir="ltr">
+      <small class="note" id="authTeacherCodeHelp"></small>
+    </div>
+    <button type="submit" class="btn" id="authGo"></button>
+  </form>
+</div>
